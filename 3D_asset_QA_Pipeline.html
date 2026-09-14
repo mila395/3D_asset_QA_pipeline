@@ -1,0 +1,1106 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Asset QA Pipeline </title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Pretendard:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Pretendard', sans-serif; background-color: #121212; color: #e5e5e5; }
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: #222; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb { background: #555; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #777; }
+        
+        .scan-line {
+            position: absolute; top: 0; left: 0; right: 0; height: 3px;
+            background: rgba(59, 130, 246, 0.9); box-shadow: 0 0 15px rgba(59, 130, 246, 0.6);
+            animation: scan 2s infinite linear; z-index: 10;
+        }
+        @keyframes scan { 0% { top: 0%; opacity: 0; } 10% { opacity: 1; } 90% { opacity: 1; } 100% { top: 100%; opacity: 0; } }
+        
+        .drag-over { border-color: #3b82f6 !important; background-color: rgba(59, 130, 246, 0.2) !important; box-shadow: 0 0 15px rgba(59, 130, 246, 0.5); }
+        .drag-over-mod { border-color: #a855f7 !important; background-color: rgba(168, 85, 247, 0.2) !important; box-shadow: 0 0 15px rgba(168, 85, 247, 0.5); }
+        
+        .step-locked { opacity: 0.4; pointer-events: none; filter: grayscale(100%); }
+        .ai-box { animation: pulse-box 1.5s infinite; }
+        @keyframes pulse-box { 0% { box-shadow: 0 0 0 0 rgba(239,68,68,0.7); } 70% { box-shadow: 0 0 0 8px rgba(239,68,68,0); } 100% { box-shadow: 0 0 0 0 rgba(239,68,68,0); } }
+
+        /* 커스텀 다이얼로그 팝업 */
+        #customDialog { transition: opacity 0.2s; }
+    </style>
+</head>
+<body class="min-h-screen p-6 flex flex-col">
+
+    <div class="max-w-7xl mx-auto w-full flex-1 flex flex-col">
+        <!-- 헤더 -->
+        <div class="flex flex-col md:flex-row justify-between items-end border-b border-gray-800 pb-4 mb-6 gap-4">
+            <div>
+                <h1 class="text-3xl font-bold text-white mb-2">3D Asset QA Pipeline <span class="text-blue-500 text-lg">PRO</span></h1>
+                <p class="text-gray-400 text-sm">연간 전체 목록 보기 및 커스텀 체크리스트(Ctrl+V) 지원</p>
+            </div>
+            <div class="flex gap-3 items-center">
+                <select id="yearSelect" onchange="changeYear(this.value)" class="bg-[#242424] border border-gray-600 text-white px-4 py-2 rounded font-bold outline-none cursor-pointer">
+                    <!-- JS에서 동적 생성됨 -->
+                </select>
+                <button onclick="requestAddYear()" class="px-3 py-2 bg-gray-800 hover:bg-gray-700 text-gray-300 text-sm rounded transition-colors font-bold">+ 연도 추가</button>
+                <button onclick="requestClearData()" class="px-4 py-2 bg-red-900/40 hover:bg-red-800 text-red-200 text-sm rounded transition-colors font-bold">전체 초기화</button>
+            </div>
+        </div>
+
+        <!-- 📊 연도별 & 월별 진행 현황 -->
+        <div class="flex flex-col md:flex-row gap-6 mb-6">
+            <div class="flex-1 bg-[#1a1a1a] border border-gray-800 rounded-xl p-5 shadow-lg">
+                <h3 class="text-lg font-bold text-green-400 mb-3"><span id="dashYearText">2026</span>년 누적 진행 현황</h3>
+                <div id="dashYearBars" class="w-full"></div>
+            </div>
+            <div class="flex-1 bg-[#1a1a1a] border border-gray-800 rounded-xl p-5 shadow-lg">
+                <h3 class="text-lg font-bold text-blue-400 mb-3" id="dashMonthTitle"><span id="dashMonthText">1</span>월 진행 현황</h3>
+                <div id="dashboardBars" class="w-full"></div>
+            </div>
+        </div>
+
+        <!-- 월별(전체) 탭 -->
+        <div class="flex justify-between items-end mb-4 gap-4 flex-wrap">
+            <div class="flex space-x-2 overflow-x-auto pb-2 flex-1 hide-scrollbar" id="monthTabs"></div>
+        </div>
+
+        <!-- 어셋 그리드 -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6 pb-10" id="assetGrid"></div>
+    </div>
+
+    <!-- 숨김 파일 인풋 모음 -->
+    <input type="file" id="thumbnailInput" accept="image/*" class="hidden" onchange="handleThumbnailUpload(event)">
+    <input type="file" id="folderInput" webkitdirectory directory multiple class="hidden" onchange="handleFolderUpload(event)">
+    <input type="file" id="customChecklistImgInput" accept="image/*" class="hidden" onchange="handleCustomChecklistImg(event)">
+
+    <!-- 전역 커스텀 다이얼로그 (alert, prompt 대체) -->
+    <div id="customDialog" class="fixed inset-0 bg-black/80 backdrop-blur-sm hidden items-center justify-center z-[9999] opacity-0">
+        <div class="bg-[#1f1f1f] border border-gray-700 rounded-xl shadow-2xl p-6 max-w-md w-full mx-4 transform transition-all duration-200 scale-95" id="dialogBox">
+            <h3 id="dialogTitle" class="text-xl font-bold text-white mb-2">알림</h3>
+            <p id="dialogMessage" class="text-gray-300 text-sm mb-5 leading-relaxed break-keep">메시지 내용</p>
+            <input type="text" id="dialogInput" class="w-full bg-[#111] border border-gray-600 rounded px-3 py-2 text-white mb-5 hidden focus:border-blue-500 outline-none" autocomplete="off">
+            <div class="flex justify-end gap-2" id="dialogButtons"></div>
+        </div>
+    </div>
+
+    <!-- 3단계 마법사 모달 -->
+    <div id="wizardModal" class="fixed inset-0 bg-black/95 backdrop-blur-sm hidden flex-col items-center justify-center z-40 p-4">
+        <div class="bg-[#1a1a1a] w-full max-w-7xl h-[95vh] rounded-xl shadow-2xl flex flex-col border border-gray-700 overflow-hidden">
+            <!-- Header & Tabs -->
+            <div class="bg-[#222] border-b border-gray-700 shrink-0">
+                <div class="p-4 flex justify-between items-center">
+                    <h2 class="text-2xl font-bold text-white flex items-center gap-2">
+                        <span id="modalTitleIcon"></span>
+                        <span id="modalTitleName" class="text-blue-400"></span> 
+                        <span class="text-gray-500 text-lg font-normal">QA 파이프라인</span>
+                    </h2>
+                    <button onclick="closeModal()" class="text-gray-400 hover:text-white font-bold px-4 py-2 bg-gray-800 rounded">✕ 임시저장 및 닫기</button>
+                </div>
+                <div class="flex border-t border-gray-800 bg-[#1a1a1a]">
+                    <div id="tab-step1" onclick="switchStep(1)" class="flex-1 p-3 text-center cursor-pointer font-bold border-b-2 border-blue-500 text-blue-400 bg-[#252525]">1. 📁 텍스처 A/N 검수</div>
+                    <div id="tab-step2" onclick="switchStep(2)" class="flex-1 p-3 text-center cursor-pointer font-bold border-b-2 border-transparent text-gray-500 step-locked">2. 📝 세부 QA 리스트</div>
+                    <div id="tab-step3" onclick="switchStep(3)" class="flex-1 p-3 text-center cursor-pointer font-bold border-b-2 border-transparent text-gray-500 step-locked">3. ✅ 최종 승인 결정</div>
+                </div>
+            </div>
+
+            <!-- Content Area -->
+            <div class="flex-1 overflow-hidden relative flex flex-col min-h-0">
+                
+                <!-- STEP 1: 폴더 검수 -->
+                <div id="step1-content" class="absolute inset-0 p-6 flex flex-col gap-4 overflow-hidden">
+                    <div id="dropZoneFolder" class="flex flex-col items-center justify-center bg-[#242424] py-4 rounded-lg border-2 border-dashed border-gray-600 cursor-pointer hover:border-blue-500 transition-colors shrink-0" onclick="document.getElementById('folderInput').click()">
+                        <div class="pointer-events-none text-center">
+                            <h3 class="font-bold text-white">어셋 폴더 업로드 (클릭 또는 폴더 통째로 드래그)</h3>
+                        </div>
+                    </div>
+                    
+                    <div class="flex flex-col lg:flex-row gap-6 flex-1 min-h-0 overflow-hidden">
+                        <!-- A/N 맵 시각 검수 뷰어 -->
+                        <div class="lg:w-2/3 bg-[#242424] rounded-lg border border-gray-700 flex flex-col shadow-lg overflow-hidden relative">
+                            <div class="p-3 bg-[#2a2a2a] border-b border-gray-700 font-bold flex justify-between items-center text-gray-300 shrink-0">
+                                <span>👀 A/N맵 세트 육안 검수 (언제든 번복/재확인 가능)</span>
+                                <span id="pairCounter" class="text-blue-400 font-bold text-sm bg-blue-900/30 px-2 py-1 rounded">대기중</span>
+                            </div>
+                            
+                            <div class="flex-1 flex gap-4 p-4 min-h-0" id="pairViewerArea">
+                                <div class="flex-1 bg-black rounded border border-gray-700 flex items-center justify-center p-2 relative h-full">
+                                    <span class="absolute top-2 left-2 bg-black/80 px-2 py-1 text-xs text-white rounded z-10" id="aMapTitle">Albedo</span>
+                                    <img id="aMapImg" class="max-h-full max-w-full object-contain pointer-events-none">
+                                </div>
+                                <div class="flex-1 bg-[#222] rounded border border-gray-700 flex items-center justify-center p-2 relative h-full">
+                                    <span class="absolute top-2 left-2 bg-black/80 px-2 py-1 text-xs text-white rounded z-10" id="nMapTitle">Normal</span>
+                                    <img id="nMapImg" class="max-h-full max-w-full object-contain mix-blend-screen pointer-events-none">
+                                </div>
+                            </div>
+                            
+                            <div id="pairNavStrip" class="bg-[#1a1a1a] h-14 flex items-center px-4 gap-2 overflow-x-auto shrink-0 border-t border-gray-800"></div>
+
+                            <div class="p-4 bg-[#2a2a2a] border-t border-gray-700 flex justify-between items-center gap-4 shrink-0" id="pairController">
+                                <button onclick="changePair(-1)" class="px-4 py-3 bg-gray-700 hover:bg-gray-600 text-white font-bold rounded-lg shadow">◀ 이전</button>
+                                <div class="flex gap-4">
+                                    <button id="btnJudgeFail" onclick="judgePair('fail')" class="px-8 py-3 bg-gray-700 text-gray-300 font-bold rounded-lg border-2 border-transparent transition-all">❌ 불일치</button>
+                                    <button id="btnJudgePass" onclick="judgePair('pass')" class="px-8 py-3 bg-gray-700 text-gray-300 font-bold rounded-lg border-2 border-transparent transition-all">✅ 일치함</button>
+                                </div>
+                                <button onclick="changePair(1)" class="px-4 py-3 bg-gray-700 hover:bg-gray-600 text-white font-bold rounded-lg shadow">다음 ▶</button>
+                            </div>
+                        </div>
+
+                        <!-- 해상도 및 로그 검수 & 다음 단계 이동 -->
+                        <div class="lg:w-1/3 flex flex-col gap-4 min-h-0">
+                            <div class="bg-[#242424] rounded-lg border border-gray-700 flex flex-col flex-1 min-h-0 overflow-hidden">
+                                <div class="p-3 bg-[#2a2a2a] border-b border-gray-700 font-bold text-gray-300 shrink-0">자동 스캔 로그 (사이즈 검사)</div>
+                                <div id="namingCheckLog" class="p-4 space-y-2 font-mono text-sm overflow-y-auto flex-1 bg-black/30 text-gray-400">폴더를 업로드하세요.</div>
+                            </div>
+                            <div class="bg-[#242424] p-4 rounded-lg border border-gray-700 shrink-0 text-center">
+                                <p id="step1StatusText" class="text-sm text-orange-400 mb-3">모든 A/N 세트의 판정을 완료해야 합니다.</p>
+                                <button id="btnFinishStep1" onclick="finishStep1()" class="w-full py-4 bg-gray-700 text-gray-500 font-bold rounded-lg cursor-not-allowed transition-all text-lg" disabled>모든 세트 검수 완료 (다음 단계 ➔)</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- STEP 2: 1차 세부 QA (커스텀/표준 분기) -->
+                <div id="step2-content" class="absolute inset-0 p-6 hidden flex-col bg-[#1a1a1a] min-h-0">
+                    <div class="flex justify-between items-center mb-4 shrink-0">
+                        <div>
+                            <h3 class="text-xl font-bold text-white flex items-center gap-2">📝 1차 세부 QA 리스트</h3>
+                            <p class="text-gray-400 text-sm mt-1" id="step2DescText">항목들을 꼼꼼히 확인하고 체크해주세요.</p>
+                        </div>
+                    </div>
+                    
+                    <!-- 수정 어셋용 항목 추가 영역 (Ctrl+V 및 Drag&Drop 지원) -->
+                    <div id="customChecklistInputArea" class="bg-[#242424] p-4 rounded-xl border border-blue-900/50 mb-4 hidden shrink-0 shadow-lg transition-colors">
+                        <div class="flex gap-2 items-center">
+                            <input type="text" id="customItemTextInput" class="flex-1 bg-black border border-gray-700 rounded px-4 py-2.5 text-white outline-none focus:border-blue-500" placeholder="수정/확인할 내용을 입력하세요 (이미지: Ctrl+V 또는 드래그 앤 드롭)">
+                            <button onclick="document.getElementById('customChecklistImgInput').click()" class="bg-gray-700 hover:bg-gray-600 text-white px-4 py-2.5 rounded font-bold transition-colors whitespace-nowrap">🖼️ 파일첨부</button>
+                            <button onclick="addCustomChecklistItem()" class="bg-blue-600 hover:bg-blue-500 text-white px-6 py-2.5 rounded font-bold shadow-lg transition-colors whitespace-nowrap">항목 추가</button>
+                        </div>
+                        <div id="customItemTempImgWrapper" class="mt-3 hidden relative w-32 h-32 border border-gray-600 rounded bg-black flex items-center justify-center group overflow-hidden shadow-lg">
+                            <img id="customItemTempImg" class="max-w-full max-h-full object-contain">
+                            <button onclick="clearCustomTempImg()" class="absolute inset-0 bg-black/60 text-white opacity-0 group-hover:opacity-100 flex items-center justify-center font-bold transition-opacity">✕ 삭제</button>
+                        </div>
+                    </div>
+
+                    <div id="checklistContent" class="flex-1 overflow-y-auto min-h-0 pr-4 pb-4 space-y-6"></div>
+                    
+                    <div class="pt-4 mt-2 border-t border-gray-800 text-right shrink-0">
+                        <button id="btnGotoStep3" onclick="switchStep(3)" class="px-8 py-4 bg-gray-700 text-gray-400 rounded-lg font-bold cursor-not-allowed transition-colors text-lg" disabled>진행률 100% 달성 필요</button>
+                    </div>
+                </div>
+
+                <!-- STEP 3: 2차 최종 검수 -->
+                <div id="step3-content" class="absolute inset-0 p-6 hidden flex-col bg-[#1a1a1a] min-h-0">
+                    <div class="flex justify-between items-center mb-4 shrink-0">
+                        <h3 class="text-2xl font-bold text-white">✅ 2차 최종 승인 및 상태 결정</h3>
+                    </div>
+                    <div id="secondChecklistContent" class="flex-1 overflow-y-auto min-h-0 pr-4 space-y-4"></div>
+                    <div class="pt-6 border-t border-gray-800 flex gap-4 shrink-0 mt-4">
+                        <button onclick="markStatus('rework')" class="flex-1 py-4 bg-orange-600 hover:bg-orange-500 text-white rounded-lg font-bold text-sm md:text-base shadow-lg">❌ 재검수 (수정 요망)</button>
+                        <button onclick="markStatus('hold')" class="flex-1 py-4 bg-yellow-600 hover:bg-yellow-500 text-white rounded-lg font-bold text-sm md:text-base shadow-lg">⏸️ 보류 (피드백 전달)</button>
+                        <button onclick="markStatus('done')" class="flex-1 py-4 bg-green-600 hover:bg-green-500 text-white rounded-lg font-bold text-sm md:text-base shadow-lg">✅ 완벽함 (최종 승인)</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 전역 드래그 방지
+        window.addEventListener("dragenter", e => { e.preventDefault(); e.stopPropagation(); });
+        window.addEventListener("dragover", e => { e.preventDefault(); e.stopPropagation(); });
+        window.addEventListener("drop", e => { e.preventDefault(); e.stopPropagation(); });
+
+        // --- Custom Dialog System ---
+        function showDialog({ type = 'alert', title = '알림', message = '', placeholder = '', defaultValue = '', onConfirm, onCancel, confirmText = '확인', cancelText = '취소' }) {
+            const modal = document.getElementById('customDialog'); const box = document.getElementById('dialogBox');
+            document.getElementById('dialogTitle').textContent = title; document.getElementById('dialogMessage').innerHTML = message;
+            const input = document.getElementById('dialogInput'); const btns = document.getElementById('dialogButtons');
+            btns.innerHTML = '';
+
+            if(type === 'prompt') {
+                input.classList.remove('hidden'); input.value = defaultValue; input.placeholder = placeholder;
+                setTimeout(() => input.focus(), 50);
+                input.onkeydown = (e) => { if(e.key === 'Enter') document.getElementById('btnConfirmDialog').click(); };
+            } else { input.classList.add('hidden'); }
+
+            const close = () => {
+                modal.classList.add('opacity-0'); box.classList.replace('scale-100', 'scale-95');
+                setTimeout(() => modal.classList.replace('flex', 'hidden'), 200);
+            };
+
+            if(type === 'confirm' || type === 'prompt') {
+                const btnCancel = document.createElement('button');
+                btnCancel.className = 'px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-white font-medium transition-colors';
+                btnCancel.textContent = cancelText;
+                btnCancel.onclick = () => { close(); if(onCancel) onCancel(); };
+                btns.appendChild(btnCancel);
+            }
+
+            const btnConfirm = document.createElement('button');
+            btnConfirm.id = 'btnConfirmDialog';
+            btnConfirm.className = 'px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded text-white font-bold transition-colors shadow-lg';
+            btnConfirm.textContent = confirmText;
+            btnConfirm.onclick = () => { close(); if(onConfirm) { type === 'prompt' ? onConfirm(input.value) : onConfirm(); } };
+            btns.appendChild(btnConfirm);
+
+            modal.classList.replace('hidden', 'flex'); void modal.offsetWidth;
+            modal.classList.remove('opacity-0'); box.classList.replace('scale-95', 'scale-100');
+        }
+        function myAlert(title, msg) { showDialog({type:'alert', title, message:msg}); }
+        function myConfirm(title, msg, onConfirm) { showDialog({type:'confirm', title, message:msg, onConfirm}); }
+
+        // --- Core Data Models ---
+        const qaCategories1st = [
+            {
+                title: "1. 네이밍 및 기본 세팅",
+                items: [
+                    { id: "s1_1", text: "머티리얼 이름이 지정된 규칙에 맞게 재질명으로 끝나는가? (예: 이름 뒤에 _A 등 불필요한 문자 제거)" },
+                    { id: "s1_2", text: "FBX 파일의 Transform(Position/Rotation) 축이 모두 0, 0, 0으로 초기화되어 있는가?" },
+                    { id: "s1_3", text: "한 오브젝트에 불필요하게 많은 머티리얼이 사용되지 않았는가? (가능한 한 텍스처 병합하여 1~2개로 최적화)" },
+                    { id: "s1_4", text: "불필요한 데칼, 라벨, 더미 오브젝트 등이 깨끗하게 삭제되었는가?" }
+                ]
+            },
+            {
+                title: "2. 모델링 (Modeling & Geometry)",
+                items: [
+                    { id: "s2_1", text: "실제 레퍼런스 사진 및 지형과 비교하여 오브젝트의 스케일, 비율(기둥 굵기, 펜스 높이 등)이 정확한가?" },
+                    { id: "s2_2", text: "지붕 끝부분, 바닥, 난간, 펜스, 기둥, 창문 프레임 등에 적절한 두께감이 모델링 되어 있는가? (플랜 1장으로 처리된 곳이 없는지 확인)" },
+                    { id: "s2_3", text: "보이지 않는 뒷면(지붕 밑, 계단 아래, 담장 양 끝 등)에 구멍(Hole)이 뚫려 있거나 빈 공간이 보이지 않도록 면이 잘 막혀 있는가?" },
+                    { id: "s2_4", text: "파츠 간에 모델링이 연결되지 않아 틈새가 보이거나, 오브젝트가 공중에 떠 있지 않은가?" },
+                    { id: "s2_5", text: "둥근 형태의 오브젝트(기둥 등)에 스무싱 그룹(Smoothing Group)이 올바르게 적용되어 각져 보이지 않는가?" },
+                    { id: "s2_6", text: "플랜(Plane)으로 대충 처리된 디테일(로프 등)은 없는가? (실제 모델링으로 구현)" }
+                ]
+            },
+            {
+                title: "3. 텍스처 및 UV (Texture & UV Mapping)",
+                items: [
+                    { id: "s3_1", text: "모든 머티리얼에 A맵(Albedo)과 N맵(Normal)이 누락 없이 할당되었는가?" },
+                    { id: "s3_2", text: "A맵과 N맵이 서로 매칭되는 짝이 맞으며, 두 맵의 해상도(사이즈)가 동일한가?" },
+                    { id: "s3_3", text: "특정 면에서 UV가 길게 늘어나 텍스처가 왜곡되거나(Stretching), 다른 위치의 텍스처가 침범하여 보이지 않는가?" },
+                    { id: "s3_4", text: "텍스처 스케일이 적절한가? (너무 크거나 작아서 해상도가 뭉개지는 현상 방지)" },
+                    { id: "s3_5", text: "타일링 작업 시 데칼코마니처럼 패턴이 뚜렷하게 반복되거나 이음새 라인이 보이지 않도록 불규칙하게(웨더링 등) 잘 혼합되었는가?" },
+                    { id: "s3_6", text: "실제 사진과 비교하여 채도와 밝기가 너무 튀지 않는가? (전체적인 톤 다운 및 주변 환경과의 조화 확인)" },
+                    { id: "s3_7", text: "텍스처 이미지 자체에 짙은 그림자나 강한 하이라이트가 구워져(Bake) 있지 않은가? (유니티 씬 라이팅 시 대비가 과도해짐을 방지)" },
+                    { id: "s3_8", text: "윗면과 옆면 등 꺾이는 모서리 부분의 밝기 톤이 자연스럽게 이어지고 UV가 어긋나지 않았는가?" }
+                ]
+            }
+        ];
+
+        const qaCategories2nd = [
+            {
+                title: "2차 최종 검수 항목",
+                items: [
+                    { id: "f1_1", text: "1차 자가 검수 및 발견된 지적 사항이 모두 완벽히 수정되었는가?", showIssues: true },
+                    { id: "f1_2", text: "유니티(Unity) 엔진 임포트 시 머티리얼이 깨지거나 텍스처가 누락되지 않는가?" },
+                    { id: "f1_3", text: "실제 씬 라이팅(Directional Light) 환경에서 노말맵 요철과 반사율이 자연스러운가?" }
+                ]
+            }
+        ];
+
+        let currentYear = "2026"; 
+        let currentMonth = "all"; // 기본값을 전체(all)로 설정
+        let appData = {}; let currentAssetId = null;
+        
+        let activePairs = []; // { base, aBlob, nBlob }
+        let pairIndex = 0;
+        let customTempImgBase64 = null;
+
+        function initApp() {
+            const saved = localStorage.getItem('3d_qa_pro_v12_noyear');
+            if(saved) {
+                appData = JSON.parse(saved);
+                // 저장된 데이터가 있으면 존재하는 연도 중 최신 연도를 기본값으로 세팅
+                const years = Object.keys(appData).sort((a,b) => b - a);
+                if(years.length > 0 && !appData[currentYear]) currentYear = years[0];
+            } else { 
+                initYearData("2024"); initYearData("2025"); initYearData("2026"); 
+            }
+            if(!appData[currentYear]) initYearData(currentYear);
+            
+            // 데이터 무결성 보장
+            for(let y in appData) {
+                for(let m in appData[y]) {
+                    appData[y][m].assets.forEach(a => {
+                        if(!a.type) a.type = 'new';
+                        if(!a.customChecklist) a.customChecklist = [];
+                        if(!a.anPairsStatus) a.anPairsStatus = {};
+                        if(!a.status) a.status = 'pending';
+                    });
+                }
+            }
+            
+            renderYearSelect();
+            document.getElementById('yearSelect').value = currentYear;
+            setupStaticDndZones();
+            setupCustomChecklistEvents();
+            renderTabs(); renderDashboard(); renderAssets(); 
+        }
+
+        function renderYearSelect() {
+            const select = document.getElementById('yearSelect');
+            select.innerHTML = '';
+            const years = Object.keys(appData).sort((a,b) => b - a); // 내림차순
+            years.forEach(y => {
+                const opt = document.createElement('option');
+                opt.value = y; opt.textContent = `${y}년`;
+                select.appendChild(opt);
+            });
+        }
+
+        function requestAddYear() {
+            showDialog({
+                type: 'prompt', title: '연도 추가', message: '추가할 연도를 입력하세요. (예: 2027)', placeholder: '연도 입력',
+                onConfirm: (y) => {
+                    y = y.trim();
+                    if(!y || isNaN(y)) { myAlert('오류', '올바른 연도 숫자를 입력해주세요.'); return; }
+                    if(appData[y]) { myAlert('안내', '이미 존재하는 연도입니다.'); return; }
+                    initYearData(y); 
+                    currentYear = y;
+                    saveData(); 
+                    renderYearSelect();
+                    document.getElementById('yearSelect').value = currentYear;
+                    changeYear(y);
+                }
+            });
+        }
+
+        function initYearData(year) {
+            appData[year] = {};
+            for(let i=1; i<=12; i++) appData[year][i] = { assets: [] };
+        }
+        function saveData() { localStorage.setItem('3d_qa_pro_v12_noyear', JSON.stringify(appData)); renderDashboard(); }
+        function requestClearData() { myConfirm('초기화 경고', '모든 데이터가 삭제됩니다. 진행하시겠습니까?', () => { localStorage.removeItem('3d_qa_pro_v12_noyear'); location.reload(); }); }
+        function changeYear(y) { currentYear = y; if(!appData[currentYear]) initYearData(currentYear); renderTabs(); renderDashboard(); renderAssets(); }
+
+        // 자산 검색 공통 유틸 (모든 연도 전체 탐색으로 확장)
+        function findAssetById(id) {
+            for(let y in appData) {
+                for(let i=1; i<=12; i++) {
+                    const found = appData[y][i].assets.find(a => a.id === id);
+                    if(found) return found;
+                }
+            }
+            return null;
+        }
+
+        // --- STREAMING_CHUNK: Rendering Dashboards... ---
+        function renderDashboard() {
+            let yTotal=0, yDone=0, yRework=0, yHold=0;
+            for(let i=1; i<=12; i++) {
+                const arr = appData[currentYear][i].assets;
+                yTotal += arr.length; 
+                yDone += arr.filter(a=>a.status==='done').length; 
+                yRework += arr.filter(a=>a.status==='rework').length;
+                yHold += arr.filter(a=>a.status==='hold').length;
+            }
+            let yPending = yTotal - yDone - yRework - yHold;
+            
+            document.getElementById('dashYearText').textContent = currentYear;
+            const yBar = document.getElementById('dashYearBars');
+            if(yTotal === 0) yBar.innerHTML = `<div class="text-gray-500 text-sm py-2">등록된 어셋 없음</div>`;
+            else {
+                yBar.innerHTML = `
+                    <div class="flex justify-between text-xs mb-1.5 font-bold"><span class="text-green-500">완료 ${yDone}</span><span class="text-orange-500">수정 ${yRework}</span><span class="text-yellow-500">보류 ${yHold}</span><span class="text-blue-500">진행중 ${yPending}</span></div>
+                    <div class="w-full bg-gray-800 h-6 rounded-full flex border border-gray-700 overflow-hidden shadow-inner">
+                        <div style="width: ${(yDone/yTotal)*100}%" class="bg-green-500 transition-all duration-500"></div>
+                        <div style="width: ${(yRework/yTotal)*100}%" class="bg-orange-500 transition-all duration-500"></div>
+                        <div style="width: ${(yHold/yTotal)*100}%" class="bg-yellow-500 transition-all duration-500"></div>
+                        <div style="width: ${(yPending/yTotal)*100}%" class="bg-blue-500 transition-all duration-500"></div>
+                    </div>`;
+            }
+
+            // 월별 현황 바 업데이트 (all인 경우 모든 연도 누적으로 처리)
+            let mTotal=0, mDone=0, mRework=0, mHold=0, mPending=0;
+            if(currentMonth === 'all') {
+                for(let y in appData) {
+                    for(let i=1; i<=12; i++) {
+                        const mArr = appData[y][i].assets;
+                        mTotal += mArr.length; 
+                        mDone += mArr.filter(a=>a.status==='done').length; 
+                        mRework += mArr.filter(a=>a.status==='rework').length; 
+                        mHold += mArr.filter(a=>a.status==='hold').length;
+                    }
+                }
+                mPending = mTotal - mDone - mRework - mHold;
+                document.getElementById('dashMonthTitle').innerHTML = `<span class="text-blue-400">모든 연도 누적</span> 진행 현황`;
+            } else {
+                const mArr = appData[currentYear][currentMonth].assets;
+                mTotal = mArr.length; 
+                mDone = mArr.filter(a=>a.status==='done').length; 
+                mRework = mArr.filter(a=>a.status==='rework').length; 
+                mHold = mArr.filter(a=>a.status==='hold').length;
+                mPending = mTotal - mDone - mRework - mHold;
+                document.getElementById('dashMonthTitle').innerHTML = `<span id="dashMonthText" class="text-blue-400">${currentMonth}</span>월 진행 현황`;
+            }
+
+            const mBar = document.getElementById('dashboardBars');
+            if(mTotal === 0) mBar.innerHTML = `<div class="text-gray-500 text-sm py-2">등록된 어셋 없음</div>`;
+            else {
+                mBar.innerHTML = `
+                    <div class="flex justify-between text-xs mb-1.5 font-bold"><span class="text-green-500">완료 ${mDone}</span><span class="text-orange-500">수정 ${mRework}</span><span class="text-yellow-500">보류 ${mHold}</span><span class="text-blue-500">진행중 ${mPending}</span></div>
+                    <div class="w-full bg-gray-800 h-6 rounded-full flex border border-gray-700 overflow-hidden shadow-inner">
+                        <div style="width: ${(mDone/mTotal)*100}%" class="bg-green-500 transition-all duration-500"></div>
+                        <div style="width: ${(mRework/mTotal)*100}%" class="bg-orange-500 transition-all duration-500"></div>
+                        <div style="width: ${(mHold/mTotal)*100}%" class="bg-yellow-500 transition-all duration-500"></div>
+                        <div style="width: ${(mPending/mTotal)*100}%" class="bg-blue-500 transition-all duration-500"></div>
+                    </div>`;
+            }
+        }
+
+        function renderTabs() {
+            const container = document.getElementById('monthTabs'); container.innerHTML = '';
+            
+            // "전체" 탭 추가
+            const btnAll = document.createElement('button');
+            btnAll.className = `px-6 py-2.5 rounded-t-lg font-bold border-b-2 transition-colors whitespace-nowrap ${currentMonth === 'all' ? 'bg-[#333] text-white border-blue-500' : 'bg-[#222] text-gray-500 border-transparent hover:text-gray-300 hover:bg-[#2a2a2a]'}`;
+            btnAll.textContent = `전체(누적)`;
+            btnAll.onclick = () => { currentMonth = 'all'; renderTabs(); renderDashboard(); renderAssets(); };
+            container.appendChild(btnAll);
+
+            for(let i=1; i<=12; i++) {
+                const btn = document.createElement('button');
+                btn.className = `px-6 py-2.5 rounded-t-lg font-bold border-b-2 transition-colors whitespace-nowrap ${i.toString()===currentMonth ? 'bg-[#333] text-white border-blue-500' : 'bg-[#222] text-gray-500 border-transparent hover:text-gray-300 hover:bg-[#2a2a2a]'}`;
+                btn.textContent = `${i}월`;
+                btn.onclick = () => { currentMonth = i.toString(); renderTabs(); renderDashboard(); renderAssets(); };
+                container.appendChild(btn);
+            }
+        }
+
+        // --- STREAMING_CHUNK: Asset Grid Management with Quick Actions... ---
+        function renderAssets() {
+            const grid = document.getElementById('assetGrid'); grid.innerHTML = '';
+            
+            let assetsToRender = [];
+            if(currentMonth === 'all') {
+                const years = Object.keys(appData).sort((a,b) => b - a); // 최신 연도부터 내림차순
+                years.forEach(y => {
+                    for(let i=1; i<=12; i++) {
+                        // 전체 탭에서는 'done'(최종 완료) 상태인 어셋만 필터링하여 가져옵니다.
+                        const doneAssetsInMonth = appData[y][i].assets.filter(a => a.status === 'done');
+                        assetsToRender = assetsToRender.concat(doneAssetsInMonth.map(a => ({...a, _sourceYear: y, _sourceMonth: i})));
+                    }
+                });
+                
+                // 만약 완료된 어셋이 하나도 없을 경우 메시지 표시
+                if (assetsToRender.length === 0) {
+                    grid.innerHTML = `<div class="col-span-full text-center text-gray-500 py-10 mt-10">모든 연도를 통틀어 최종 완료된 어셋이 아직 없습니다.</div>`;
+                    return;
+                }
+            } else {
+                assetsToRender = appData[currentYear][currentMonth].assets.map(a => ({...a, _sourceYear: currentYear, _sourceMonth: currentMonth}));
+            }
+            
+            assetsToRender.forEach(asset => {
+                let total = 0; let checked = 0;
+                if(asset.type === 'new') {
+                    total = qaCategories1st.reduce((a,c)=>a+c.items.length,0) + asset.customIssues.length;
+                    checked = Object.values(asset.checks).filter(Boolean).length;
+                } else if(asset.type === 'modified') {
+                    total = asset.customChecklist.length + asset.customIssues.length;
+                    checked = asset.customChecklist.filter(c => c.checked).length + Object.keys(asset.checks).filter(k => k.startsWith('c_') || k.startsWith('rw_') || k.startsWith('hd_') || k.startsWith('fail_')).filter(k => asset.checks[k]).length;
+                }
+                
+                const prog = total===0 ? 0 : Math.round((checked/total)*100);
+                
+                let bColor = 'border-gray-700'; 
+                let sText = `<span class="text-blue-400">진행중</span>`;
+                let shadow = '';
+                
+                if(asset.status === 'done') { 
+                    bColor = 'border-green-500'; shadow = 'shadow-[0_0_10px_rgba(34,197,94,0.3)]';
+                    sText = `<span class="text-green-500 font-bold">최종 완료</span>`; 
+                }
+                else if(asset.status === 'rework') { 
+                    bColor = 'border-orange-500'; shadow = 'shadow-[0_0_10px_rgba(249,115,22,0.3)]';
+                    sText = `<span class="text-orange-500 font-bold">수정 진행중</span>`; 
+                }
+                else if(asset.status === 'hold') { 
+                    bColor = 'border-yellow-500'; shadow = 'shadow-[0_0_10px_rgba(234,179,8,0.3)]';
+                    sText = `<span class="text-yellow-500 font-bold">보류 (피드백)</span>`; 
+                }
+                else if(prog === 100 && total > 0) { 
+                    sText = `<span class="text-gray-300">2차 검수 대기</span>`; 
+                }
+
+                const typeBadge = asset.type === 'new' ? '<span class="bg-blue-900/80 border border-blue-700 text-blue-200 text-[10px] px-2 py-0.5 rounded-full absolute top-2 right-2 backdrop-blur-sm shadow-lg">✨ 신규</span>' : '<span class="bg-purple-900/80 border border-purple-700 text-purple-200 text-[10px] px-2 py-0.5 rounded-full absolute top-2 right-2 backdrop-blur-sm shadow-lg">🛠️ 수정</span>';
+                
+                const monthBadge = currentMonth === 'all' ? `<span class="absolute top-2 left-2 bg-black/80 text-white text-[10px] px-2 py-0.5 rounded shadow border border-gray-700">${asset._sourceYear}년 ${asset._sourceMonth}월</span>` : '';
+
+                const card = document.createElement('div');
+                card.className = `bg-[#242424] rounded-xl border ${bColor} ${shadow} overflow-hidden flex flex-col hover:border-blue-400 cursor-pointer group transition-all`;
+                card.innerHTML = `
+                    <div class="h-40 bg-[#1a1a1a] relative flex items-center justify-center overflow-hidden" onclick="event.stopPropagation(); currentAssetId='${asset.id}'; document.getElementById('thumbnailInput').click()">
+                        ${asset.thumbnail ? `<img src="${asset.thumbnail}" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300">` : `<span class="text-sm text-gray-600 flex flex-col items-center gap-1"><span class="text-2xl mb-1">🖼️</span><span>썸네일 등록(클릭)</span></span>`}
+                        ${typeBadge}
+                        ${monthBadge}
+                    </div>
+                    <div class="p-4 flex-1 flex flex-col" onclick="openWizard('${asset.id}')">
+                        <div class="flex justify-between items-start mb-2">
+                            <h3 class="font-bold text-white truncate pr-2 text-[17px]" title="${asset.name}">${asset.name}</h3>
+                            <button onclick="event.stopPropagation(); requestDeleteAsset('${asset.id}')" class="text-gray-500 hover:text-red-500 shrink-0 font-bold bg-black/20 hover:bg-black/50 w-6 h-6 flex items-center justify-center rounded-full transition-colors">✕</button>
+                        </div>
+                        
+                        <div class="mt-auto pt-2">
+                            <div class="text-xs mb-1.5 flex justify-between items-center">
+                                <span>${sText}</span>
+                                <span class="text-gray-400 font-bold">${prog}%</span>
+                            </div>
+                            <div class="w-full bg-gray-800 h-1.5 rounded-full mb-3 shadow-inner overflow-hidden border border-gray-700">
+                                <div class="bg-${prog===100?'green':'blue'}-500 h-full transition-all duration-500" style="width: ${prog}%"></div>
+                            </div>
+                            
+                            <!-- 퀵 액션 컨트롤러 -->
+                            <div class="flex gap-1.5 mt-2 pt-3 border-t border-gray-800">
+                                <button onclick="event.stopPropagation(); quickMarkStatus('${asset.id}', 'done')" class="flex-1 bg-[#1a1a1a] hover:bg-green-600/20 border border-gray-700 hover:border-green-500 text-gray-400 hover:text-green-400 text-[11px] py-1.5 rounded transition-all font-bold">최종완료</button>
+                                <button onclick="event.stopPropagation(); quickMarkStatus('${asset.id}', 'hold')" class="flex-1 bg-[#1a1a1a] hover:bg-yellow-600/20 border border-gray-700 hover:border-yellow-500 text-gray-400 hover:text-yellow-400 text-[11px] py-1.5 rounded transition-all font-bold">보류</button>
+                                <button onclick="event.stopPropagation(); quickMarkStatus('${asset.id}', 'rework')" class="flex-1 bg-[#1a1a1a] hover:bg-orange-600/20 border border-gray-700 hover:border-orange-500 text-gray-400 hover:text-orange-400 text-[11px] py-1.5 rounded transition-all font-bold">수정</button>
+                            </div>
+                        </div>
+                    </div>`;
+                grid.appendChild(card);
+            });
+
+            // 전체 탭이 아닐 때만 어셋 추가 카드 표시
+            if(currentMonth !== 'all') {
+                const addCardNew = document.createElement('div');
+                addCardNew.id = 'addCardNew';
+                addCardNew.className = 'bg-[#242424]/50 border border-gray-700 border-dashed rounded-xl flex flex-col items-center justify-center cursor-pointer hover:border-blue-500 min-h-[250px] transition-colors relative';
+                addCardNew.onclick = () => requestAssetAdd('new');
+                addCardNew.innerHTML = `
+                    <div class="text-center text-gray-400 group pointer-events-none z-10">
+                        <div class="text-4xl mb-2 group-hover:text-blue-400 transition-colors">✨</div>
+                        <div class="font-bold text-lg text-white mb-1">신규 어셋 추가</div>
+                        <div class="text-xs">클릭 또는 폴더 <span class="text-blue-400">드롭</span></div>
+                    </div>`;
+                grid.appendChild(addCardNew);
+
+                const addCardMod = document.createElement('div');
+                addCardMod.id = 'addCardMod';
+                addCardMod.className = 'bg-purple-900/10 border border-purple-800/50 border-dashed rounded-xl flex flex-col items-center justify-center cursor-pointer hover:border-purple-500 min-h-[250px] transition-colors relative';
+                addCardMod.onclick = () => requestAssetAdd('modified');
+                addCardMod.innerHTML = `
+                    <div class="text-center text-purple-400/70 group pointer-events-none z-10">
+                        <div class="text-4xl mb-2 group-hover:text-purple-400 transition-colors">🛠️</div>
+                        <div class="font-bold text-lg text-purple-200 mb-1">수정 어셋 추가</div>
+                        <div class="text-xs">클릭 또는 폴더 <span class="text-purple-400">드롭</span></div>
+                    </div>`;
+                grid.appendChild(addCardMod);
+
+                setupAssetDragAndDrop();
+            }
+        }
+
+        function quickMarkStatus(id, newStatus) {
+            const asset = findAssetById(id);
+            if(!asset) return;
+            
+            // 팝업 없이 즉시 상태 변경
+            asset.status = newStatus;
+            saveData(); renderAssets();
+        }
+
+        function requestAssetAdd(type) {
+            if(currentMonth === 'all') { myAlert('안내', '어셋을 추가하려면 특정 월 탭을 선택해주세요.'); return; }
+            showDialog({
+                type: 'prompt', title: type === 'new' ? '신규 어셋 추가' : '수정 어셋 추가', message: '어셋의 이름을 입력하세요.', placeholder: '어셋명 입력',
+                onConfirm: (n) => {
+                    if(!n || !n.trim()) return;
+                    appData[currentYear][currentMonth].assets.push({ 
+                        id: 'a_'+Date.now(), name: n.trim(), thumbnail: '', type: type, checks: {}, secondChecks: {}, customIssues: [], customChecklist: [], anPairsStatus: {}, folderScanned: false, status: 'pending' 
+                    });
+                    saveData(); renderAssets();
+                }
+            });
+        }
+        
+        function requestDeleteAsset(id) { 
+            myConfirm('어셋 삭제', '이 어셋과 관련된 모든 데이터가 삭제됩니다. 삭제하시겠습니까?', () => { 
+                for(let y in appData) {
+                    for(let i=1; i<=12; i++) {
+                        appData[y][i].assets = appData[y][i].assets.filter(a=>a.id!==id); 
+                    }
+                }
+                saveData(); renderDashboard(); renderAssets(); 
+            }); 
+        }
+
+        function handleThumbnailUpload(e) {
+            const f = e.target.files[0]; if(!f) return;
+            const r = new FileReader(); r.onload = ev => { 
+                const asset = findAssetById(currentAssetId);
+                if(asset) asset.thumbnail = ev.target.result; 
+                saveData(); renderAssets(); 
+            };
+            r.readAsDataURL(f); e.target.value = '';
+        }
+
+        // --- STREAMING_CHUNK: Setting up Drag and Drop and Ctrl+V Event Listeners... ---
+        async function getAllFilesAndFolderName(items) {
+            const files = [];
+            let rootFolderName = "New_Asset";
+            const queue = [];
+
+            for (let i = 0; i < items.length; i++) {
+                if(items[i].webkitGetAsEntry) {
+                    const item = items[i].webkitGetAsEntry();
+                    if (item) {
+                        if (item.isDirectory && rootFolderName === "New_Asset") rootFolderName = item.name;
+                        else if (item.isFile && rootFolderName === "New_Asset") rootFolderName = "Asset_" + Date.now().toString().slice(-4);
+                        queue.push(item);
+                    }
+                }
+            }
+            async function readEntries(reader) {
+                let result = []; let entries;
+                do { entries = await new Promise(res => reader.readEntries(res, () => res([]))); result = result.concat(entries); } while (entries.length > 0);
+                return result;
+            }
+            while (queue.length > 0) {
+                const entry = queue.shift();
+                if (entry.isFile) { const file = await new Promise(resolve => entry.file(resolve, () => resolve(null))); if(file) files.push(file); } 
+                else if (entry.isDirectory) { const reader = entry.createReader(); const entries = await readEntries(reader); queue.push(...entries); }
+            }
+            return { files, rootFolderName };
+        }
+
+        function setupStaticDndZones() {
+            const bindZone = (id, callback) => {
+                const el = document.getElementById(id); if(!el) return;
+                el.ondragenter = e => { e.preventDefault(); e.stopPropagation(); };
+                el.ondragover = e => { e.preventDefault(); e.stopPropagation(); el.classList.add('drag-over'); };
+                el.ondragleave = e => { e.preventDefault(); e.stopPropagation(); el.classList.remove('drag-over'); };
+                el.ondrop = async e => {
+                    e.preventDefault(); e.stopPropagation(); el.classList.remove('drag-over');
+                    if(e.dataTransfer && e.dataTransfer.items) callback(e.dataTransfer.items);
+                };
+            };
+            bindZone('dropZoneFolder', async items => { const { files } = await getAllFilesAndFolderName(items); runFolderScan(files); });
+        }
+        
+        function setupAssetDragAndDrop() {
+            if(currentMonth === 'all') return; // 전체 보기에서는 비활성화
+            
+            const setupCard = (id, typeClass, astType) => {
+                const card = document.getElementById(id); if(!card) return;
+                card.ondragenter = e => { e.preventDefault(); e.stopPropagation(); };
+                card.ondragover = e => { e.preventDefault(); e.stopPropagation(); card.classList.add(typeClass); };
+                card.ondragleave = e => { e.preventDefault(); e.stopPropagation(); card.classList.remove(typeClass); };
+                card.ondrop = async e => { 
+                    e.preventDefault(); e.stopPropagation(); card.classList.remove(typeClass);
+                    if(!e.dataTransfer || !e.dataTransfer.items) return;
+                    const { files, rootFolderName } = await getAllFilesAndFolderName(e.dataTransfer.items);
+                    if(!files.length) return;
+                    
+                    const newId = 'a_'+Date.now();
+                    appData[currentYear][currentMonth].assets.push({ id: newId, name: rootFolderName, thumbnail: '', type: astType, checks: {}, secondChecks: {}, customIssues: [], customChecklist: [], anPairsStatus: {}, folderScanned: false, status: 'pending' });
+                    saveData(); renderAssets(); openWizard(newId); runFolderScan(files);
+                };
+            };
+            setupCard('addCardNew', 'drag-over', 'new');
+            setupCard('addCardMod', 'drag-over-mod', 'modified');
+        }
+
+        // Ctrl+V 및 드래그 앤 드롭을 통한 이미지 첨부 로직 (커스텀 리스트용)
+        function setupCustomChecklistEvents() {
+            const customArea = document.getElementById('customChecklistInputArea');
+            if(customArea) {
+                customArea.ondragenter = e => { e.preventDefault(); e.stopPropagation(); };
+                customArea.ondragover = e => { e.preventDefault(); e.stopPropagation(); customArea.classList.add('border-blue-500', 'bg-blue-900/20'); };
+                customArea.ondragleave = e => { e.preventDefault(); e.stopPropagation(); customArea.classList.remove('border-blue-500', 'bg-blue-900/20'); };
+                customArea.ondrop = e => {
+                    e.preventDefault(); e.stopPropagation(); customArea.classList.remove('border-blue-500', 'bg-blue-900/20');
+                    if(e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                        const file = Array.from(e.dataTransfer.files).find(f => f.type.startsWith('image/'));
+                        if(file) loadCustomImage(file);
+                    }
+                };
+            }
+
+            // Global paste event listener
+            document.addEventListener('paste', e => {
+                const modal = document.getElementById('wizardModal');
+                const customArea = document.getElementById('customChecklistInputArea');
+                
+                // 마법사 모달이 열려있고, 수정 어셋 화면(customChecklistInputArea가 보일 때)일 때만 작동
+                if(modal.classList.contains('hidden') || customArea.classList.contains('hidden')) return;
+
+                const asset = getAsset();
+                if(!asset || asset.type !== 'modified') return;
+
+                const items = (e.clipboardData || e.originalEvent.clipboardData).items;
+                for (const item of items) {
+                    if (item.type.indexOf('image') === 0) {
+                        const blob = item.getAsFile();
+                        loadCustomImage(blob);
+                        e.preventDefault();
+                        break; // 한 번에 하나의 이미지만 처리
+                    }
+                }
+            });
+        }
+
+        function loadCustomImage(fileOrBlob) {
+            const reader = new FileReader();
+            reader.onload = (ev) => {
+                customTempImgBase64 = ev.target.result;
+                document.getElementById('customItemTempImg').src = customTempImgBase64;
+                document.getElementById('customItemTempImgWrapper').classList.replace('hidden', 'flex');
+            };
+            reader.readAsDataURL(fileOrBlob);
+        }
+
+        // --- STREAMING_CHUNK: Wizard Navigation & Control... ---
+        function getAsset() { return findAssetById(currentAssetId); }
+
+        function openWizard(id) {
+            currentAssetId = id; const asset = getAsset();
+            document.getElementById('modalTitleName').textContent = asset.name;
+            document.getElementById('modalTitleIcon').textContent = asset.type === 'new' ? '✨' : '🛠️';
+            
+            document.getElementById('step2DescText').textContent = asset.type === 'new' ? "항목들을 꼼꼼히 확인하고 체크해주세요." : "수정 어셋에 대한 커스텀 검수 리스트를 작성하고 확인합니다.";
+            
+            document.getElementById('tab-step2').classList.toggle('step-locked', !asset.folderScanned);
+            
+            let targetStep = 1;
+            if(asset.folderScanned) targetStep = 2;
+            
+            document.getElementById('wizardModal').classList.replace('hidden', 'flex'); switchStep(targetStep);
+        }
+
+        function switchStep(step) {
+            for(let i=1; i<=3; i++) {
+                const tab = document.getElementById(`tab-step${i}`); const content = document.getElementById(`step${i}-content`);
+                if(i === step) { tab.classList.replace('border-transparent', 'border-blue-500'); tab.classList.replace('text-gray-500', 'text-blue-400'); tab.classList.add('bg-[#252525]'); content.classList.replace('hidden', 'flex'); } 
+                else { tab.classList.replace('border-blue-500', 'border-transparent'); tab.classList.replace('text-blue-400', 'text-gray-500'); tab.classList.remove('bg-[#252525]'); content.classList.replace('flex', 'hidden'); }
+            }
+            if(step === 1) renderCurrentPair(); 
+            if(step === 2) renderChecklist1st(); 
+            if(step === 3) renderChecklist2nd();
+        }
+        function closeModal() { document.getElementById('wizardModal').classList.replace('flex', 'hidden'); renderAssets(); }
+
+        // --- STREAMING_CHUNK: Step 1 (Reversible A/N Checking)... ---
+        function handleFolderUpload(e) { runFolderScan(Array.from(e.target.files)); e.target.value = ''; }
+        
+        async function runFolderScan(files) {
+            if(!files.length) return;
+            const log = document.getElementById('namingCheckLog'); if(log) log.innerHTML = '';
+            
+            const VALID_SIZES = [512, 1024, 2048];
+            const imgFiles = files.filter(f => f.type.startsWith('image/') || /\.(png|jpe?g|webp)$/i.test(f.name));
+            if(imgFiles.length === 0) { if(log) log.innerHTML = `<div class="text-red-400">❌ 이미지가 없습니다.</div>`; return; }
+
+            let hasSizeError = false;
+            for (const f of imgFiles) {
+                const blob = URL.createObjectURL(f);
+                const img = new Image();
+                img.onload = () => {
+                    const valid = VALID_SIZES.includes(img.width) && VALID_SIZES.includes(img.height) && (img.width === img.height);
+                    if(valid) { if(log) log.innerHTML += `<div class="text-green-400">✅ ${f.name} (${img.width}x${img.height})</div>`; }
+                    else {
+                        if(log) log.innerHTML += `<div class="text-red-400 font-bold">❌ ${f.name} (${img.width}x${img.height}) 규격 위반</div>`;
+                        getAsset().customIssues.push({ id: 'c_'+Date.now()+Math.random(), text: `[해상도 경고] ${f.name} 사이즈 확인 요망` });
+                        hasSizeError = true;
+                    }
+                };
+                img.onerror = () => { if(log) log.innerHTML += `<div class="text-red-400 font-bold">❌ ${f.name} 로드 실패</div>`; }
+                img.src = blob;
+            }
+
+            const aFiles = imgFiles.filter(f => f.name.includes('_A.'));
+            const nFiles = imgFiles.filter(f => f.name.includes('_N.'));
+            activePairs = []; pairIndex = 0;
+
+            const asset = getAsset();
+            aFiles.forEach(aF => {
+                const baseName = aF.name.replace('_A.', '');
+                const nF = nFiles.find(n => n.name.replace('_N.', '') === baseName);
+                if(nF) {
+                    activePairs.push({ base: baseName, aBlob: URL.createObjectURL(aF), nBlob: URL.createObjectURL(nF) });
+                    if(!asset.anPairsStatus[baseName]) asset.anPairsStatus[baseName] = 'pending';
+                }
+            });
+
+            if(activePairs.length > 0) {
+                if(log) log.innerHTML += `<div class="text-blue-400 font-bold mt-2">총 ${activePairs.length}세트의 A/N맵 발견. 판정을 시작하세요.</div>`;
+                document.getElementById('pairController').classList.remove('hidden');
+                saveData();
+                renderCurrentPair();
+            } else {
+                if(log) log.innerHTML += `<div class="text-red-400 font-bold mt-2">❌ 짝이 맞는 _A, _N 맵 세트를 찾을 수 없습니다.</div>`;
+                document.getElementById('pairController').classList.add('hidden');
+                document.getElementById('pairNavStrip').innerHTML = '';
+                document.getElementById('aMapImg').src = ''; document.getElementById('nMapImg').src = '';
+                if(!hasSizeError && getAsset().folderScanned === false) {
+                    getAsset().folderScanned = true; saveData();
+                    document.getElementById('btnFinishStep1').disabled = false;
+                    document.getElementById('btnFinishStep1').classList.replace('bg-gray-700', 'bg-blue-600');
+                    document.getElementById('btnFinishStep1').classList.replace('text-gray-500', 'text-white');
+                    document.getElementById('btnFinishStep1').classList.add('hover:bg-blue-500');
+                }
+            }
+        }
+
+        function renderCurrentPair() {
+            if(activePairs.length === 0) return;
+            const asset = getAsset();
+            const p = activePairs[pairIndex];
+            document.getElementById('pairCounter').textContent = `검수 진행: ${pairIndex + 1} / ${activePairs.length}`;
+            document.getElementById('aMapImg').src = p.aBlob; document.getElementById('aMapTitle').textContent = p.base + "_A";
+            document.getElementById('nMapImg').src = p.nBlob; document.getElementById('nMapTitle').textContent = p.base + "_N";
+
+            const status = asset.anPairsStatus[p.base];
+            const btnPass = document.getElementById('btnJudgePass');
+            const btnFail = document.getElementById('btnJudgeFail');
+            
+            btnPass.className = `px-8 py-3 font-bold rounded-lg border-2 transition-all ${status==='pass' ? 'bg-green-600/20 text-green-400 border-green-500 shadow-[0_0_10px_rgba(34,197,94,0.5)]' : 'bg-gray-700 border-transparent text-gray-300 hover:bg-gray-600'}`;
+            btnFail.className = `px-8 py-3 font-bold rounded-lg border-2 transition-all ${status==='fail' ? 'bg-red-600/20 text-red-400 border-red-500 shadow-[0_0_10px_rgba(239,68,68,0.5)]' : 'bg-gray-700 border-transparent text-gray-300 hover:bg-gray-600'}`;
+
+            renderPairNavStrip();
+            checkStep1Completion();
+        }
+
+        function renderPairNavStrip() {
+            const strip = document.getElementById('pairNavStrip');
+            const asset = getAsset();
+            strip.innerHTML = '';
+            activePairs.forEach((p, idx) => {
+                const status = asset.anPairsStatus[p.base];
+                let colorClass = 'bg-gray-600';
+                if(status === 'pass') colorClass = 'bg-green-500';
+                if(status === 'fail') colorClass = 'bg-red-500';
+                
+                const isSelected = idx === pairIndex ? 'ring-2 ring-white ring-offset-2 ring-offset-[#1a1a1a]' : 'opacity-60 hover:opacity-100';
+                
+                strip.innerHTML += `
+                    <div onclick="jumpToPair(${idx})" class="cursor-pointer w-10 h-10 rounded overflow-hidden flex-shrink-0 relative ${isSelected} transition-all border border-gray-700">
+                        <img src="${p.aBlob}" class="w-full h-full object-cover">
+                        <div class="absolute bottom-0 right-0 w-3 h-3 ${colorClass} rounded-tl-sm shadow"></div>
+                    </div>`;
+            });
+        }
+
+        function changePair(dir) {
+            pairIndex += dir;
+            if(pairIndex < 0) pairIndex = activePairs.length - 1;
+            if(pairIndex >= activePairs.length) pairIndex = 0;
+            renderCurrentPair();
+        }
+        function jumpToPair(idx) { pairIndex = idx; renderCurrentPair(); }
+
+        function judgePair(status) {
+            const asset = getAsset();
+            const p = activePairs[pairIndex];
+            
+            // 토글 방식: 누른 버튼을 다시 누르면 취소
+            if(asset.anPairsStatus[p.base] === status) {
+                asset.anPairsStatus[p.base] = 'pending';
+                asset.customIssues = asset.customIssues.filter(i => i.id !== `fail_${p.base}`);
+            } else {
+                asset.anPairsStatus[p.base] = status;
+                if(status === 'fail') {
+                    if(!asset.customIssues.find(i => i.id === `fail_${p.base}`)) {
+                        asset.customIssues.push({ id: `fail_${p.base}`, text: `[A/N 불일치] ${p.base} 세트 무늬 확인 요망` });
+                    }
+                } else {
+                    asset.customIssues = asset.customIssues.filter(i => i.id !== `fail_${p.base}`);
+                }
+            }
+            saveData();
+            
+            // 다음으로 자동 이동 (변경 시에만)
+            if(asset.anPairsStatus[p.base] !== 'pending' && pairIndex < activePairs.length - 1) {
+                setTimeout(() => { pairIndex++; renderCurrentPair(); }, 200);
+            } else {
+                renderCurrentPair();
+            }
+        }
+
+        function checkStep1Completion() {
+            const asset = getAsset();
+            if(activePairs.length === 0) return;
+            const isAllJudged = activePairs.every(p => asset.anPairsStatus[p.base] === 'pass' || asset.anPairsStatus[p.base] === 'fail');
+            
+            const btn = document.getElementById('btnFinishStep1');
+            const text = document.getElementById('step1StatusText');
+            
+            if(isAllJudged) {
+                btn.disabled = false;
+                btn.classList.replace('bg-gray-700', 'bg-blue-600'); btn.classList.replace('text-gray-500', 'text-white');
+                btn.classList.add('hover:bg-blue-500', 'shadow-[0_0_15px_rgba(59,130,246,0.5)]');
+                text.textContent = "✅ 모든 세트의 판정이 완료되었습니다."; text.classList.replace('text-orange-400', 'text-green-400');
+            } else {
+                btn.disabled = true;
+                btn.classList.replace('bg-blue-600', 'bg-gray-700'); btn.classList.replace('text-white', 'text-gray-500');
+                btn.classList.remove('hover:bg-blue-500', 'shadow-[0_0_15px_rgba(59,130,246,0.5)]');
+                text.textContent = "모든 A/N 세트의 판정을 완료해야 합니다."; text.classList.replace('text-green-400', 'text-orange-400');
+            }
+        }
+        function finishStep1() { getAsset().folderScanned = true; saveData(); document.getElementById('tab-step2').classList.remove('step-locked'); switchStep(2); }
+
+        // --- STREAMING_CHUNK: Step 2 Custom Checklist & Standard QA... ---
+        function renderChecklist1st() {
+            const asset = getAsset();
+            const container = document.getElementById('checklistContent'); container.innerHTML = '';
+            
+            // 1. 커스텀 UI 토글
+            if (asset.type === 'modified') {
+                document.getElementById('customChecklistInputArea').classList.remove('hidden');
+                
+                if (asset.customChecklist.length > 0) {
+                    const sec = document.createElement('div'); sec.className = 'bg-blue-900/10 p-5 rounded-xl border border-blue-800/40 shadow-lg mb-6';
+                    sec.innerHTML = `<h3 class="text-lg font-bold text-blue-400 mb-3 border-b border-blue-800/40 pb-2">🛠️ 사용자가 추가한 커스텀 확인 항목</h3>`;
+                    
+                    asset.customChecklist.forEach(item => {
+                        const chk = item.checked ? 'checked' : '';
+                        const imgHtml = item.image ? `<img src="${item.image}" class="mt-2 max-h-32 rounded border border-gray-600">` : '';
+                        
+                        sec.innerHTML += `
+                            <div class="flex items-start gap-3 py-3 border-b border-gray-800/50 last:border-0 hover:bg-[#2a2a2a] px-3 rounded transition-colors group">
+                                <label class="flex items-start gap-3 cursor-pointer flex-1 pt-0.5">
+                                    <input type="checkbox" class="w-5 h-5 accent-blue-500 shrink-0 mt-0.5" ${chk} onchange="updateCustomCheck('${item.id}', this.checked)">
+                                    <div class="flex flex-col">
+                                        <span class="text-[15px] leading-relaxed ${chk?'text-gray-500 line-through':'text-blue-100'}">${item.text}</span>
+                                        ${imgHtml}
+                                    </div>
+                                </label>
+                                <button onclick="deleteCustomCheck('${item.id}')" class="text-gray-600 hover:text-red-500 font-bold px-2 py-1 opacity-0 group-hover:opacity-100 transition-opacity">✕</button>
+                            </div>`;
+                    });
+                    container.appendChild(sec);
+                } else {
+                    container.innerHTML += `<div class="text-center text-gray-500 py-10">등록된 커스텀 검수 항목이 없습니다.<br>위 입력창에서 추가해주세요. (이미지 Ctrl+V 지원)</div>`;
+                }
+
+            } else {
+                document.getElementById('customChecklistInputArea').classList.add('hidden');
+                
+                qaCategories1st.forEach(cat => {
+                    const sec = document.createElement('div'); sec.className = 'bg-[#252525] p-5 rounded-xl border border-gray-700 shadow-lg mb-6';
+                    sec.innerHTML = `<h3 class="text-lg font-bold text-blue-400 mb-3 border-b border-gray-600 pb-2">${cat.title}</h3>`;
+                    cat.items.forEach(item => {
+                        const chk = asset.checks[item.id] || false;
+                        sec.innerHTML += `
+                            <div class="flex items-start gap-3 py-2 border-b border-gray-700/50 last:border-0 hover:bg-[#2a2a2a] px-2 rounded transition-colors">
+                                <label class="flex items-start gap-3 cursor-pointer group flex-1 pt-1">
+                                    <input type="checkbox" class="w-5 h-5 accent-blue-500 shrink-0" ${chk?'checked':''} onchange="updateCheck1st('${item.id}', this.checked)">
+                                    <span class="text-[15px] leading-relaxed flex-1 ${chk?'text-gray-500 line-through':'text-gray-300 group-hover:text-white'}">${item.text}</span>
+                                </label>
+                            </div>`;
+                    });
+                    container.appendChild(sec);
+                });
+            }
+
+            // 공통: 사전 지적사항
+            if(asset.customIssues.length > 0) {
+                const sec = document.createElement('div'); sec.className = 'bg-red-900/10 p-5 rounded-xl border border-red-800/40 shadow-lg mb-6';
+                sec.innerHTML = `<h3 class="font-bold text-red-400 mb-3 border-b border-red-800/40 pb-2">🚨 사전 검수 및 상태 지적사항</h3>`;
+                asset.customIssues.forEach(item => {
+                    const chk = asset.checks[item.id] || false;
+                    sec.innerHTML += `
+                        <label class="flex items-start gap-3 py-2.5 cursor-pointer group hover:bg-black/20 p-2 rounded transition-colors mb-1">
+                            <input type="checkbox" class="mt-0.5 w-5 h-5 accent-red-500 shrink-0" ${chk?'checked':''} onchange="updateCheck1st('${item.id}', this.checked)">
+                            <span class="text-[15px] leading-relaxed ${chk?'text-gray-500 line-through':'text-red-200'}">${item.text}</span>
+                        </label>`;
+                });
+                container.appendChild(sec);
+            }
+
+            checkStep2Progress();
+        }
+
+        function handleCustomChecklistImg(e) {
+            const f = e.target.files[0]; if(!f) return;
+            loadCustomImage(f);
+            e.target.value = '';
+        }
+        function clearCustomTempImg() {
+            customTempImgBase64 = null;
+            document.getElementById('customItemTempImg').src = '';
+            document.getElementById('customItemTempImgWrapper').classList.replace('flex', 'hidden');
+        }
+        function addCustomChecklistItem() {
+            const input = document.getElementById('customItemTextInput');
+            const text = input.value.trim();
+            if(!text && !customTempImgBase64) return;
+            
+            getAsset().customChecklist.push({ id: 'ci_'+Date.now(), text: text, image: customTempImgBase64, checked: false });
+            saveData();
+            input.value = ''; clearCustomTempImg();
+            renderChecklist1st();
+        }
+        function updateCustomCheck(id, isChecked) {
+            const item = getAsset().customChecklist.find(i => i.id === id);
+            if(item) { item.checked = isChecked; saveData(); renderChecklist1st(); }
+        }
+        function deleteCustomCheck(id) {
+            getAsset().customChecklist = getAsset().customChecklist.filter(i => i.id !== id);
+            saveData(); renderChecklist1st();
+        }
+
+        function updateCheck1st(id, isChecked) { getAsset().checks[id] = isChecked; saveData(); renderChecklist1st(); }
+        
+        function checkStep2Progress() {
+            const asset = getAsset();
+            let total = 0; let checked = 0;
+            
+            if(asset.type === 'new') {
+                total = qaCategories1st.reduce((a,c)=>a+c.items.length,0) + asset.customIssues.length;
+                checked = Object.values(asset.checks).filter(Boolean).length;
+            } else {
+                total = asset.customChecklist.length + asset.customIssues.length;
+                checked = asset.customChecklist.filter(c => c.checked).length + Object.keys(asset.checks).filter(k => k.startsWith('c_') || k.startsWith('fail_') || k.startsWith('rw_') || k.startsWith('hd_') || k.startsWith('p_')).filter(k => asset.checks[k]).length;
+            }
+
+            const btn = document.getElementById('btnGotoStep3');
+            if(total === checked && total > 0) {
+                btn.className = 'px-8 py-4 bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-bold text-lg shadow-[0_0_15px_rgba(59,130,246,0.5)] transition-all cursor-pointer';
+                btn.textContent = '100% 완료! 2차 최종 승인 ➔';
+                btn.disabled = false;
+                document.getElementById('tab-step3').classList.remove('step-locked');
+            } else {
+                btn.className = 'px-8 py-4 bg-gray-700 text-gray-400 rounded-lg font-bold text-lg cursor-not-allowed transition-all';
+                btn.textContent = `진행률 달성 필요 (${checked}/${total})`;
+                btn.disabled = true;
+                document.getElementById('tab-step3').classList.add('step-locked');
+            }
+        }
+
+        // --- STEP 3: 2차 최종 승인 및 상태 처리 ---
+        function renderChecklist2nd() {
+            const asset = getAsset();
+            const container = document.getElementById('secondChecklistContent'); container.innerHTML = '';
+            
+            qaCategories2nd[0].items.forEach(item => {
+                let html = '';
+                if(item.showIssues && asset.customIssues.length > 0) {
+                    html += `<ul class="list-disc pl-6 text-sm text-red-300 mt-2 bg-red-950/30 p-4 rounded-lg space-y-2"><div class="font-bold text-red-400 mb-2 border-b border-red-800/50 pb-1">이전 단계 지적 사항 요약</div>`;
+                    asset.customIssues.forEach(iss => { html += `<li>${iss.text}</li>`; });
+                    html += `</ul>`;
+                }
+
+                container.innerHTML += `
+                    <div class="bg-[#242424] p-5 rounded-xl border border-gray-700 shadow-md">
+                        <label class="flex items-start gap-3 cursor-pointer group">
+                            <span class="text-xl">✅</span>
+                            <span class="text-lg font-bold text-gray-200 group-hover:text-white pt-0.5">${item.text}</span>
+                        </label>
+                        ${html}
+                    </div>`;
+            });
+        }
+
+        function markStatus(newStatus) {
+            const asset = getAsset();
+            // 팝업 없이 즉각 상태만 변경하도록 요청된 내용 적용 (마법사 안의 버튼도 동일하게)
+            asset.status = newStatus;
+            saveData(); closeModal();
+        }
+
+        document.addEventListener('DOMContentLoaded', initApp);
+    </script>
+</body>
+</html>
